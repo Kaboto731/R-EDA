@@ -1,0 +1,297 @@
+---
+title: "Santillana_Borowska-HW5"
+author: "Manuel Lopez - Santillana and Lesya Borowska"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo=TRUE, include = FALSE}
+# show all installed packages
+library(tidyverse) # for gglot2 
+library(ggplot2) # to install ggbiplot
+library(ggbiplot) # for biplot
+library(dplyr) # for data transformation
+library(VIM) # for aggr
+library(mice) # for md.pairs
+library(Rcpp) # for Loading Amelia
+library(Amelia) # for missmap
+library(gridExtra) # for grid.arrange
+library(caret) #train conrtol
+library(car) # for symbox
+library(randomForest) # for randomForest
+library(haven) # for reading the names of the countries
+library(corrgram) # for correlogram
+library(forcats) # for fct_lump
+
+# install.packages('fo',repos='http://cran.us.r-project.org')
+# library(fo) # for
+
+# library() # for
+# library() # for
+```
+
+## 1 Sales Prediction
+
+(a) Conduct exploratory data analysis (EDA). 
+
+In many businesses, identifying which customers will make a purchase (and when), is a critical exercise. This is true for both brick-and-mortar outlets and online stores. The data provided in this assignment is website traffic data acquired from an online retailer. The data provides information on customer's website site visit behavior. Customers may visit the store multiple times, on multiple days, with or without making a purchase. The data set we consider consists of 70071 observations of 35 variables. To be able to use a lot of R functions, we converted all categorical variables with a character data type into factors. 
+
+```{r, echo=FALSE, warning = FALSE, message = F, results = "hide"}  
+Train = read_csv("Train.csv") # load data
+#?Train
+#View(Train)
+#
+# tranform all characters in factors
+Train = Train %>% mutate_if(is.character, as.factor)
+#
+# str(Train)
+```
+
+After we saw the structure of the data, we decided to rescale timeSinceLastVisit (TLV) by division them by 604800 sec. Therefore, the TLV is in week units. 1 TSLV is equal to 1 week. We overwrote the old TLV variables with the scaled TLV. Also, it would be more convenience to do further EDA with rescaled TLV.
+
+```{r, echo=FALSE, warning = FALSE, message = F, results = "hide"}  
+# rescale timeSinceLastVisit from the second to the weeks
+Train$timeSinceLastVisit = Train$timeSinceLastVisit/604800
+```
+
+The next step that we did to lead the EDA is to find out the percentage missings for each variable. Below, there is a summary of the percentage missings for each column: 
+
+```{r, echo=FALSE, warning=FALSE}  
+# summarize the percentage missing for each column
+Train %>% mutate_all(is.na) %>% summarise_all(mean) %>% glimpse()
+#
+# extract some data for easier further analysis
+revenue = Train$revenue
+PVs = Train$pageviews # PVs
+TLV = Train$timeSinceLastVisit # in week units: 1 = 1 week
+VN = Train$visitNumber
+```
+
+From the summary, we see that there are 24 variables with the missings. Between them, there are 8 variables with the missings more than $96\%$: campaign, keyword, adContent, adwordsClickInfo.page, adwordsClickInfo.slot, adwordsClickInfo.gclId, adwordsClickInfo.adNetworkType, and adwordsClickInfo.isVideoAd. There are 5 variables with the missings more than $54\%$, but less than $71\%$: region, metro, city, referralPath, and bounces. There are 3 variables with the missings more than $34\%$, but less than $48\%$: networkDomain, topLevelDomain, and newVisits. medium has $17\%$ of missings. There are 7 variables with the missings less than $0.5\%$: operatingSystem, continent, subContinent, country, pageviews (PVs), source (only two missing values), and browser (only one missing value). 
+Because the data frame is too large, for the future EDA, we deleted all variables with the missings more than $96\%$.                
+```{r, echo=FALSE, results = "hide"}
+miss_values_pr = function(x) mean(is.na(x))
+#
+miss_values = apply(Train,2,miss_values_pr)
+miss_values_index =  which(miss_values > 0.96);
+#
+# variables with missingnes greater than 90% delete
+Train_96 = Train[,-miss_values_index]
+```
+To visualize the rest of the missingness and to explore their combinations, we use aggregations for missing/imputed values from package VIM. In Fig. 1 on the left, there is proportion of missings. It shows us, for example, that over $71\%$ of metro are missing. Also about $56\%$ and $55\%$ of city and region are missing, correspondingly. On the right side, there is visualization of the pattern of the amount of missing values in certain combinations of variables. Blue color means that variables are observed, red color means that variables are missing. From the missings-in-combinations-of-variables table (not inserted, but can be seen in our R-code), we learned that only about $0.3\%$ of observations have no-missing values after we deleted all columns with the missings more than $96\%$. At the same time, only $0.002\%$ of observations have 11 missing variables. The highest percent of observations, $6.9\%$, have 5 missing variables: bounces, referralPath, metro, region, and country.     
+
+```{r, echo=FALSE, results = "hide",fig.width= 6, fig.height=5}
+# Aggregations for missing/imputed values from package VIM. Calculate or plot the amount of missing/imputed values in each variable and the amount of missing/imputed values in certain combinations of variables.
+# Example
+# aggr(data, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+# my case
+missingness_rev = aggr(Train_96,delimiter = NULL, plot = TRUE)
+# # summary of missing values
+summary(missingness_rev)
+```
+
+Fig. 1. The amount of missing values in each variable and certain combinations of variables.
+
+Because country, region, city, and metro could be useful to recover any missigness in them, we used md.pattern for investigation any structure of missing variables in the data. From the table below (1=observed, 0=missing) and Fig. 2 (blue color means that variables are observed, red color means that variables are missing), we see that there are only 84 cases where country, region, city, and metro are missing at the same time. It means that we can recover country in all other cases where country was missing. For this homework, we decided to ignore country, region, city, and metro because, it requires more time to come with a good idea for feature engineering.  
+
+```{r, echo=FALSE,fig.width= 5, fig.height=2.5}  
+# select only country, metro, region, city from Train_96 then put them into md.pattern. Because I do not want to see the plot I wrote plot = F in md.pattern 
+Train_96 %>% select(c(country, metro, region, city)) %>% md.pattern(plot = T, rotate.names = T)
+``` 
+
+Fig. 2. Missing data pattern of country, metro, region, and city.
+
+Our next EDA is to study correlation of the variables. For this task, we used a correlogram. In a correlogram, non-numeric columns in the data are ignored. We also ignored all variables with missigness more than $96\%$, sessionId, custId, newVisits, and bounces in the correlogram in Fig. 3. Here, blue color means that variables are positive correlated, red color means that variables are negative correlated. The darker is color the more positive/negative correlations between two particular variables. Also, there is the visualization of correlation coefficients to the right of the diagonal. There is also a table below Fig. 3. From this visualization and the table we see that revenue correlates with pageviews higher (correlation coefficient is 0.27) than with all other variables. revenue also negative correlates with isMobile (correlation coefficient is -0.05). revenue has almost no correlation with visitStartTime (correlation coefficient is 0.003). revenue has very low positive correlation with isTrueDirect, timeSinceLastVisit, and visitNumber.   
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE,fig.width= 5, fig.height=2}
+# take out sessionId, custId, newVisits, bounces and select only numeric variables
+Train_96_cor = Train_96 %>% select(-c(sessionId, custId, newVisits, bounces)) %>% select_if(is.numeric) %>% na.omit()
+# plot correlogram
+correlogram_Train_96_cor <- corrgram(Train_96_cor, order=NULL, lower.panel=panel.shade, upper.panel=panel.pie, text.panel=panel.txt)
+```
+
+Fig. 3. Predictors - Correlogram (unsorted).
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Return high correlations (1 > |ij| > 0.001)
+hi_corr <- data.frame()
+m <- sqrt(length(correlogram_Train_96_cor))
+for (i in 1:m){
+  for (j in 1:m){
+    if ( !is.na(correlogram_Train_96_cor[i,j])){
+      if ( abs(correlogram_Train_96_cor[i,j]) > 0.001 && correlogram_Train_96_cor[i,j] < 1) {
+        hi_corr[i,1] <- c(paste(rownames(correlogram_Train_96_cor)[i], "-" , colnames(correlogram_Train_96_cor)[j]))
+        hi_corr[i,2] <- c(paste(correlogram_Train_96_cor[i,j]))
+      }
+    }
+  }
+}
+hi_corr <- na.omit(hi_corr) # Omit NAs
+dupes <- duplicated(x=hi_corr$V2) # Select Duplicates
+hi_corr <- data.frame(hi_corr$V1[dupes == FALSE], hi_corr$V2[dupes == FALSE]) #Remove duplicates
+colnames(hi_corr) <- c("Predictors", "Correlation")
+hi_corr
+```
+
+In Fig. 4, there is a pair scatterplot matrix of the quantitative variables that are in corrgram (Fig. 3) excluding visitStartTime. As we see in Fig. 4, there is visible dependence of revenue on visitNumber (VN), timeSinceLastVisit (TLV), and pageviews (PVs). Therefore, we plotted distributions of them and their combinations in Fig. 5.   
+
+```{r, echo=FALSE,fig.width= 5, fig.height=3}  
+# # excluding custId
+Train_pairs = Train_96_cor%>% select(-c(visitStartTime))
+#plot pairs
+#windows()
+Train_pairs %>% pairs()
+```
+
+Fig. 4. A pair scatterplot matrix of the quantitative variables that are in correlogram (Fig. 3) excluding visitStartTime. 
+
+As we see, all distributions are right skewed. Therefore, they could benefit from a skew transformation. We decided to use the symbox function from package car to consider possible power transformations.  
+
+```{r, echo=FALSE,message = F, warning=FALSE,fig.width= 5, fig.height=3} 
+# plot the distributions 
+g2 = ggplot(data = Train, mapping = aes(PVs)) + geom_histogram() + labs(x = "PVs")
+g3 =  ggplot(data = Train, mapping = aes(TLV)) + geom_histogram() + labs(x = "TLV")
+g4 =  ggplot(data = Train, mapping = aes(VN)) + geom_histogram() + labs(x = "VN")
+g5 =  ggplot(data = Train, mapping = aes(PVs/VN)) + geom_histogram() + labs(x = "PVs/VN")
+g6 =  ggplot(data = Train, mapping = aes((TLV/PVs)^(-1))) + geom_histogram() + labs(x = "PVs/TLV")
+
+grid.arrange(g2, g3, g4, g5, g6, ncol = 3,
+             bottom = "Fig. 5. Original distributions of PVs, TLV, VN, PVs/VN, and PVs/TLV.")
+```
+
+From Fig. 6, we found powers that can benefit skew distributions. For VN, the power is (-1) because the boxplot that corresponds to (-1) includes all data. The median value is still skewed, but less that it was in original data. For PVs/VN, the power is log because the boxplot that corresponds to log includes a lot of data. The median value is almost symmetrical. For PVs, TLV, and PVs/TLV all of powers are not good, but we decided to try log because revenue needs to be transformed in log(revenue + 1). Therefore, the transformations are $log(x_{PVs})$ for PVs-data, $log(x_{TLV})$ for TLV-data, $-x_{VN}^{-1}$ for VN-data, $log(x_{PVs/VN})$ for PVs/VN-data, and $log(x_{PVs/TLV})$ for PVs/TLV-data. 
+
+```{r, echo=FALSE, warning = FALSE, fig.width= 6, fig.height=2.7}  
+par(mfrow = c(2,3)) # arranging the plots on the page
+# plot symbox
+symbox(PVs, powers=c(0,-0.5,-1, -2))
+symbox(TLV, powers=c(0,-0.5,-1,-2,-3)) # 0,-0.5,-1,-2,
+symbox(VN, powers=c(0,-0.5,-1,-2,-3)) # 0,-0.5,
+symbox(PVs/VN, powers=c(0,-0.5))
+symbox(PVs/TLV, powers=c(1,0,-0.5, -1))
+```
+
+Fig. 6. Symbox plots.   
+
+A visualization of the transformed distributions is shown in Fig. 7. The distributions in Fig. 7 are more close to normal distributions than their were before transformations. 
+
+```{r, echo=FALSE, message = F, warning=FALSE, fig.width= 5, fig.height=3}  
+# plot a visualization of the transformed distributions.
+g1 = ggplot(mapping = aes(log(PVs))) + geom_histogram() + labs(x = "log(PVs)")+ coord_cartesian(ylim = c(0, 20000))
+g2 = ggplot(mapping = aes(log(TLV))) + geom_histogram() + labs(x = "log(TLV)")+ coord_cartesian(ylim = c(0, 2700))
+g3 = ggplot(mapping = aes(-1/VN)) + geom_histogram() + labs(x = "-1/VN")
+g4 = ggplot(mapping = aes(log(PVs/VN))) + geom_histogram() + labs(x = "log(PVs/VN)") + coord_cartesian(ylim = c(0, 10000))
+g5 = ggplot(mapping = aes(log(PVs/TLV))) + geom_histogram() + labs(x = "log(PVs/TLV)")+ coord_cartesian(ylim = c(0, 2700))
+grid.arrange(g1, g2, g3, g4, g5, nrow = 2, ncol = 3,
+            bottom = "Fig. 7. Transformed Distributions of PVs, TLV, VN, PVs/VN, 
+            and PVs/TLV using the symbox function.")
+
+```
+
+The last step in our EDA was a quick look to the factorial data. Below is the table of channelGrouping with mean value of revenue of each factor level:
+
+```{r, echo=FALSE, message = F, warning=FALSE}
+Train_96 %>% 
+        mutate(channelGrouping = fct_lump(channelGrouping, n=8)) %>%   # keep all levels for channelGrouping because it has only 8 levels.
+        group_by(channelGrouping) %>% 
+        dplyr::summarize(n = n(),   #some basic summary stats         
+                  mean(revenue),   # sum
+                  stdev = sd(revenue)) %>% 
+        arrange(desc(n))        #and order t
+```
+
+We see that channelGrouping plays some role in the expected customer revenue because mean value of revenue dependence on channelGrouping. For example, Organic Search has mean revenue 5.7, while Referral has 24.1. There are possibilities to reduce factor levels. After tries and errors, we decided to combine Direct, Display, Social, Affiliates, (Other), and Referral. The summary of this combination is below:
+
+```{r, echo=FALSE, message = F, warning=FALSE}
+Train_96 %>% 
+        mutate(channelGrouping = fct_collapse(Train$channelGrouping, chan_Gr_meanRev13 = c("Direct","Display","Social","Affiliates","(Other)","Referral")) )%>%   
+        group_by(channelGrouping) %>% 
+        dplyr::summarize(n = n(),   #some basic summary stats         
+                  mean(revenue),   # could be to sum
+                  stdev = sd(revenue)) %>% 
+        arrange(desc(n))        #and order t
+
+```
+
+We see that channelGrouping has three levels: chan_Gr_meanRev13 (mean revenue 13), Organic Search (mean revenue 5.7), and Paid Search (mean revenue 12.4). Because mean revenue values of chan_Gr_meanRev13 and Paid Search are very close to each other, we can use only chan_Gr_meanRev13 and Organic Search for our further modeling. 
+We explored other factorial variables and found that browser could be reduced from 27 to 2 levels: Chrome (mean revenue 13) and other (mean revenue 2.2). 
+operatingSystem could be reduced from 15 to 4 levels: Macintosh (mean revenue 17), Windows (mean revenue 6.2), Android (mean revenue 1.8), and Other (mean revenue 9.2). 
+deviceCategory could be reduced from 3 to 2 levels: desktop (mean revenue 12.7), and Other (mean revenue 1.6). 
+continent could be reduced from 5 to 2 levels: Americas (mean revenue 16.4) and Other (mean revenue 0.6). 
+subContinent could be reduced from 22 to 2 levels: Northern America (mean revenue 17.6) and Other (mean revenue 0.9). 
+country could be reduced from 176 to 5 levels: United States (mean revenue 18), Canada (mean revenue 9.8), United Kingdom (mean revenue 0.2), Other (mean revenue 1), and India (mean revenue 0.1). 
+region could be reduced from 309 to 5 levels: (Missing) (mean revenue 7.3), Other (mean revenue 6.3), California (mean revenue 16.4), New York (mean revenue 28.5), Illinois (mean revenue 34.4),  and Texas (mean revenue 16). 
+metro could be reduced from 72 to 6 levels: (Missing) (mean revenue 6), San Francisco-Oakland-San Jose CA (mean revenue 15.8), Other (mean revenue 18), New York NY (mean revenue 28), Los Angeles CA (mean revenue 22), and Chicago IL (mean revenue 34). 
+city could be reduced from 477 to 6 levels: (Missing) (mean revenue 7), Mountain View (mean revenue 12), Other (mean revenue 10), New York (mean revenue 28.5), San Francisco (mean revenue 26), and Sunnyvale (mean revenue 14). 
+source could be reduced from 131 to 5 levels: mall.googleplex.com (mean revenue 28), (direct) (mean revenue 16), google (mean revenue 6), Other (mean revenue 5.5), and youtube.com (mean revenue 0.02). 
+We also did the same analysis with networkDomain, topLevelDomain, medium, referralPath. However, we decided to delete them from the data frame. Therefore, we do not provide our summary about these variables. In part b, we gave the explanation why we deleted these variables.
+
+```{r, echo=FALSE, message = F, warning=FALSE, results = "hide"}
+Train_96 %>% 
+        mutate(referralPath = fct_lump(fct_explicit_na(referralPath), n = 4)) %>%   #use of fct_explicit_na() to make "NA" a factor level too,  and then fct_lump it as well., keep top 5 most frequent countries; lump everything else into "other" category
+        group_by(referralPath) %>% 
+        dplyr::summarize(n = n(),   #some basic summary stats         
+                  mean(revenue),   # mean, we can use sum here to. If sum(revenue) is considerably greater than sum (revenue) of other levels, we will delete this variable
+                  stdev = sd(revenue)) %>% 
+        arrange(desc(n))        #and order them
+```
+
+
+(b) Prepare the data for modeling. 
+
+First, what we did with the data, was converting all categorical variables with a character data type into factors. This gave us opportunity to use a lot of R functions correctly.
+Second, we decided to rescale TLV by division it by 604800 sec. Therefore, TLV is in week units. 1 TSLV is equal to 1 week. In our opinion, people have weekly or daily behavior trend rather than second behavior trend. We overwrote the old TLV variables with the scaled TLV. 
+Third, we deleted all variables with the missings more than $96\%$. In our opinion, it is impossible to recover the data with such a huge missigness. We also deleted date after we established that all variables correspond to required time interval. We deleted region, metro, city, networkDomain, topLevelDomain, and referralPath because their missing values contribute the most in revenue. We deleted medium because its missing values contribute a lot in revenue. We deleted subContinent because it is redundant. continent is providing suficient information for contribution to revenue. We deleted visitStartTime because revenue has almost no correlation with it. We deleted newVisits and bounces because they have values 1 and NA. Now, we have only 15 variables in 70071 observations.
+```{r, echo = FALSE, results = "hide"}
+# create a new data frame Train_anal that includes everyting from Train_96 except
+# "date", "region", "metro", ... (s. below)
+Train_anal = Train_96 %>% select(-c("date","region", "metro", "city", "networkDomain", "topLevelDomain", "medium", "referralPath", "subContinent", "visitStartTime", "newVisits", "bounces"))
+```
+Fourth, we reduced levels in channelGrouping, browser, operatingSystem, deviceCategory, continent, country, source the way that we described in part a. 
+```{r, echo=FALSE, message = F, warning=FALSE}
+# run this piece line by line otherwives it does not work corretly and I do  not know why?
+# collapse variables in channelGrouping and writing it in a new data frame Train_anal_col
+ Train_anal %>% dplyr::mutate(channelGrouping = forcats::fct_collapse(Train_anal$channelGrouping, chan_Gr_meanRev13 = c("Direct", "Display", "Social", "Affiliates", "(Other)", "Referral")) ) -> Train_anal_col 
+# table(Train_anal_col$channelGrouping)  # view collapced channelGrouping
+
+# collapse variables in browser
+Train_anal_col = Train_anal %>% dplyr::mutate(browser = forcats::fct_lump(fct_explicit_na(browser), n = 1)) 
+# table(Train_anal_col$browser)  # view collapced browser
+
+# collapse variables in operatingSystem
+Train_anal_col = Train_anal %>% dplyr::mutate(operatingSystem = forcats::fct_lump(fct_explicit_na(operatingSystem), n = 3))
+
+# collapse variables in deviceCategory
+Train_anal_col = Train_anal %>% dplyr::mutate(deviceCategory = forcats::fct_lump(fct_explicit_na(deviceCategory), n = 1))
+
+# collapse variables in continent
+Train_anal_col = Train_anal %>% dplyr::mutate(continent = forcats::fct_lump(fct_explicit_na(continent), n = 1))
+
+# collapse variables in country
+Train_anal_col = Train_anal %>% dplyr::mutate(country = forcats::fct_lump(fct_explicit_na(country), n = 4)) 
+
+# collapse variables in source
+Train_anal_col = Train_anal %>% dplyr::mutate(source = forcats::fct_lump(fct_explicit_na(source), n = 4)) 
+```
+
+Fifth, we the aggregate customer-level revenue. That is, if customer $i$ has $k_i$ revenue transactions, then we computed: $custRevenue_i = \sum_j^{k_i} revenue_{ij} \ \ \  \forall i \in customers$. Afterwards, we did logarithmic transformation of revenue as $log(custRevenue_i + 1)$ and save it in a new data frame Train_mod. 
+Sixth, because we aggregated revenue, we needed to aggregate all other 14 variables. Unfortunately, we are running out of time. Therefore, after applying linear model to sessionId-level revenue, we established that channelGrouping, pageviews, isTrueDirect, isMobile, visitNumber, and timeSinceLastVisit have the highest impact on $RMSE$ and $R^2_{Adj}$ values. Hence, for this homework, we decided to use only these variables. There are the aggregations of them.
+In channelGrouping we used hot encoding. channelGrouping has only 3 levels. We created three columns: chan_Gr_meanRev13, Paid Search, and Organic Search. If in sessionId 10, for example, channelGrouping had chan_Gr_meanRev13 it will put 1 in the column chan_Gr_meanRev13 and 0 in all others. Afterwords, we took summations of all three columns separately by sessionId for each customer and named them as chan_Gr, psearch, and osearch. In the linear regression, we used  only chan_Gr and osearch because they had distinguish mean revenue 13 and 5.7 in our EDA. psearch had mean revenue 12.5 that is very close to mean revenue of chan_Gr. Therefore, we omit psearch. We also normalized osearch by visitNumber. visitNumber was aggregated by customer-level. If customer $i$ has $k_i$ visitNumber, we summed up all of them.      
+In pageviews we used the aggregate customer-level pageviews. That is, if customer $i$ has $k_i$ pageviews, then we computed: $custPageview_i = \sum_j^{k_i} pageviews_{ij} \ \ \  \forall i \in customers$. Afterwards, we did logarithmic transformation of pageviews as $log(custPageview_i + 22.86)$ and save it in a new data frame Train_mod. We did this logarithmic transformation because it makes pageviews distribution more close to normal distribution that is the best for using linear regression. The coefficient 22.86 was added to minimize $RMSE$ and increase $R^2_{Adj}$. 
+In isTrueDirect and isMobile, if customer $i$ has $k_i$ isTrueDirect and $n_i$ isMobile, we took median value of isTrueDirect and median value of isMobile.  
+
+
+In timeSinceLastVisit we used the aggregate customer-level timeSinceLastVisit. That is, if customer $i$ has $k_i$ timeSinceLastVisit, then we computed: $custtimeSinceLastVisit_i = \sum_j^{k_i} pageviews_{ij} \ \ \  \forall i \in customers$. Afterwards, we did logarithmic transformation of pageviews as $log(custPageview_i + 22.86)$ and save it in a new data frame Train_mod. We did this logarithmic transformation because it makes pageviews distribution more close to normal distribution that is the best for using linear regression. The coefficient 22.86 was added to minimize $RMSE$ and increase $R^2_{Adj}$.
+
+
+ log(pageviews/visitnum + 0.005)+
+            log(pageviews/(timesince+10^(-300))+0.5)+
+            log(timesince+0.5))
